@@ -79,15 +79,15 @@ export const updateItem = async (req: Request, res: Response) => {
   try {
     const [oldItemFromDB] = await db.select().from(items).where(eq(items.id, id));
 
-    const [updated] = await db
-      .update(items)
-      .set({ value, version: (oldItemFromDB.version ?? 1) + 1 })
-      .where(eq(items.id, id))
-      .returning();
-
-    if (!updated) {
+    if (!oldItemFromDB) {
       return res.status(404).json({ msg: "Item not found" });
     }
+
+    const [updated] = await db
+      .update(items)
+      .set({ value, version: oldItemFromDB.version + 1 })
+      .where(eq(items.id, id))
+      .returning();
 
     await setCacheSafely(cacheKey, updated);
 
