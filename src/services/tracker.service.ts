@@ -2,10 +2,14 @@ import { redisClient } from "../config/redis";
 import { db } from "../db";
 import { items, inconsistencies } from "../db/schema";
 import { eq, and } from "drizzle-orm";
+import { isDeepStrictEqual } from "node:util";
 
 // Tracks in-progress grace period timers by cache key.
 // Prevents duplicate DETECTED logs if the same item is checked multiple times within the 2s window.
 const pendingValidation = new Map<string, NodeJS.Timeout>();
+
+const hasValueMismatch = (cacheValue: unknown, dbValue: unknown) =>
+  !isDeepStrictEqual(cacheValue, dbValue);
 
 export const checkConsistency = async (id: string) => {
   const key = `item:${id}`;
@@ -22,7 +26,7 @@ export const checkConsistency = async (id: string) => {
     return;
   }
 
-  if (parsedCache.value !== dbData.value) {
+  if (hasValueMismatch(parsedCache.value, dbData.value)) {
     const [existing] = await db
       .select()
       .from(inconsistencies)
@@ -93,7 +97,7 @@ const confirmInconsistency = async (id: string) => {
     return;
   }
 
-  if (parsedCache.value !== dbData.value) {
+  if (hasValueMismatch(parsedCache.value, dbData.value)) {
     const [existing] = await db
       .select()
       .from(inconsistencies)
