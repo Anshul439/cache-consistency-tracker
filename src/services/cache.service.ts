@@ -1,7 +1,10 @@
 import { redisClient } from "../config/redis";
 import { db } from "../db";
-import { inconsistencies } from "../db/schema";
+import { inconsistencies, items } from "../db/schema";
 import { and, eq } from "drizzle-orm";
+import { InferSelectModel } from "drizzle-orm";
+
+type Item = InferSelectModel<typeof items>;
 
 export const getCache = async (key: string) => {
   const data = await redisClient.get(key);
@@ -16,7 +19,7 @@ export const getCache = async (key: string) => {
   }
 };
 
-export const setCacheSafely = async (key: string, incoming: any) => {
+export const setCacheSafely = async (key: string, incoming: Item) => {
   const enableVersioning = process.env.ENABLE_VERSIONING === "true";
 
   const current = await redisClient.get(key);
