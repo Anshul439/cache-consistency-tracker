@@ -5,6 +5,10 @@ import { items, inconsistencies } from "../db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { getCache, setCacheSafely } from "../services/cache.service";
 import { metrics } from "../utils/metrics";
+import {
+  POST_WRITE_CHECK_DELAY_MS,
+  scheduleConsistencyCheck,
+} from "../queues/consistency.queue";
 
 const createItemSchema = z.object({
   name: z.string().min(1, "name is required"),
@@ -37,7 +41,7 @@ export const createItem = async (req: Request, res: Response) => {
 };
 
 export const getItem = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(req.params.id);
   const cacheKey = `item:${id}`;
 
   try {
@@ -66,7 +70,7 @@ export const getItem = async (req: Request, res: Response) => {
 };
 
 export const updateItem = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(req.params.id);
   const cacheKey = `item:${id}`;
 
   const parsed = updateItemSchema.safeParse(req.body);
@@ -90,6 +94,9 @@ export const updateItem = async (req: Request, res: Response) => {
       .returning();
 
     await setCacheSafely(cacheKey, updated);
+
+    await scheduleConsistencyCheck(id);
+    await scheduleConsistencyCheck(id, POST_WRITE_CHECK_DELAY_MS);
 
     // Simulates a stale cache overwrite to trigger inconsistency detection
     if (process.env.FAILURE_MODE === "delay" && oldItemFromDB) {
@@ -146,7 +153,7 @@ export const getActiveInconsistencies = async (req: Request, res: Response) => {
 };
 
 export const refreshItem = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(req.params.id);
 
   try {
     const cacheKey = `item:${id}`;

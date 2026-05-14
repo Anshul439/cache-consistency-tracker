@@ -3,10 +3,11 @@ import { db } from "../db";
 import { items, inconsistencies } from "../db/schema";
 import { eq, and } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
-
-// Tracks in-progress grace period timers by cache key.
-// Prevents duplicate DETECTED logs if the same item is checked multiple times within the 2s window.
-const pendingValidation = new Map<string, NodeJS.Timeout>();
+import {
+  cancelPendingConfirmation,
+  hasPendingConfirmation,
+  scheduleConsistencyConfirmation,
+} from "../queues/consistency.queue";
 
 const hasValueMismatch = (cacheValue: unknown, dbValue: unknown) =>
   !isDeepStrictEqual(cacheValue, dbValue);
@@ -39,7 +40,7 @@ export const checkConsistency = async (id: string) => {
         ),
       );
 
-    const isPending = pendingValidation.has(key);
+    const isPending = await hasPendingConfirmation(id);
 
     if (!existing && !isPending) {
       console.log(JSON.stringify({
@@ -52,21 +53,10 @@ export const checkConsistency = async (id: string) => {
       }));
     }
 
-    // Debounce: reset timer on each detection, confirm only after 2s of sustained mismatch
-    if (pendingValidation.has(key)) {
-      clearTimeout(pendingValidation.get(key)!);
-    }
-
-    const timer = setTimeout(async () => {
-      await confirmInconsistency(id);
-      pendingValidation.delete(key);
-    }, 2000);
-
-    pendingValidation.set(key, timer);
+    await scheduleConsistencyConfirmation(id);
   } else {
-    if (pendingValidation.has(key)) {
-      clearTimeout(pendingValidation.get(key)!);
-      pendingValidation.delete(key);
+    const clearedPendingConfirmation = await cancelPendingConfirmation(id);
+    if (clearedPendingConfirmation) {
       console.log(JSON.stringify({ type: "RESOLVED_BEFORE_CONFIRMATION", key }));
     }
 
@@ -82,7 +72,7 @@ export const checkConsistency = async (id: string) => {
   }
 };
 
-const confirmInconsistency = async (id: string) => {
+export const confirmInconsistency = async (id: string) => {
   const key = `item:${id}`;
 
   const cacheData = await redisClient.get(key);
