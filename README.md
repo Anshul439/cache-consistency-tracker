@@ -21,21 +21,28 @@ Log only on state transitions. Not on every poll.
 
 The grace period exists because DB and Redis are written sequentially. The 2s window filters in-flight write blips before treating something as a real bug.
 
-A `pendingValidation` Map prevents duplicate `DETECTED` logs if the same item is picked up multiple times within the grace window.
+BullMQ delayed jobs now hold the grace-period confirmation state, so pending confirmations survive worker restarts. Deduplication ensures the same item does not accumulate many identical confirmation jobs during that window.
 
 ---
 
 ## Flow
 
-```
+```text
 PUT /items/:id → update DB + Redis
+  ├─ enqueue immediate BullMQ consistency check
+  ├─ enqueue delayed BullMQ post-write check
   └─ [FAILURE_MODE=delay] → overwrite Redis with stale value after 2s
 
-Worker (every 5s) → cursor-based sweep → compare DB vs Redis
-  MATCH    → resolve open records
-  MISMATCH → new? log + start grace period
-              known? silent update
-              after 2s: recheck → confirm → persist
+BullMQ worker
+  ├─ check-item   → compare DB vs Redis
+  │                 MATCH    → resolve open records / cancel pending confirmation
+  │                 MISMATCH → new? log DETECTED
+  │                              then enqueue delayed confirmation
+  └─ confirm-item → recheck after 2s grace period
+                    still mismatched? confirm → persist
+
+Backup audit worker (every 5s)
+  └─ cursor-based sweep → compare DB vs Redis for all items over time
 ```
 
 ---
@@ -45,6 +52,7 @@ Worker (every 5s) → cursor-based sweep → compare DB vs Redis
 - **Node.js + TypeScript**, Express v5
 - **PostgreSQL** (Drizzle ORM)
 - **Redis**
+- **BullMQ** for durable delayed confirmation and queue-based checks
 
 ---
 
@@ -65,7 +73,58 @@ FAILURE_MODE=delay
 ```bash
 pnpm drizzle-kit push   # create tables
 pnpm dev                # API server
-pnpm worker             # background sweeper
+pnpm worker             # BullMQ worker + backup sweep worker
 pnpm studio             # Drizzle Studio
 ```
 
+## Current Architecture
+
+- **API server**
+  - handles create/read/update/debug-refresh routes
+  - performs read-through caching
+  - schedules queue-based consistency checks after writes
+
+- **BullMQ worker**
+  - processes immediate consistency checks
+  - processes delayed confirmation jobs after the grace period
+
+- **Backup sweep worker**
+  - still scans items in batches every 5 seconds
+  - acts as an audit path in case any write-triggered event is missed
+
+## API
+
+- `POST /items`
+  - create a new item in PostgreSQL
+
+- `GET /items/:id`
+  - cache-first read: on a miss, fetches from DB and populates Redis
+
+- `PUT /items/:id`
+  - update the source-of-truth record
+  - update Redis
+  - enqueue immediate and delayed consistency checks
+
+- `GET /items/inconsistencies/all`
+  - list every recorded inconsistency, resolved and unresolved
+
+- `GET /items/inconsistencies/active`
+  - list only unresolved inconsistencies
+
+- `POST /items/debug/refresh/:id`
+  - manually refresh Redis from PostgreSQL
+  - mark open inconsistency records for that key as resolved
+
+- `GET /metrics`
+  - return cache hit/miss counters and inconsistency lifecycle metrics
+
+## Quick Test Flow
+
+1. `POST /items`
+2. `GET /items/:id`
+3. `GET /items/:id` again
+4. `PUT /items/:id`
+5. wait a few seconds
+6. `GET /items/inconsistencies/active`
+7. `POST /items/debug/refresh/:id`
+8. `GET /items/inconsistencies/active`
