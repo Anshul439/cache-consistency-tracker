@@ -21,7 +21,7 @@ Log only on state transitions. Not on every poll.
 
 The grace period exists because DB and Redis are written sequentially. The 2s window filters in-flight write blips before treating something as a real bug.
 
-BullMQ delayed jobs now hold the grace-period confirmation state, so pending confirmations survive worker restarts. Deduplication ensures the same item does not accumulate many identical confirmation jobs during that window.
+BullMQ delayed jobs hold the grace-period confirmation state, so pending confirmations survive worker restarts. Deduplication ensures the same item does not accumulate many identical confirmation jobs during that window.
 
 ---
 
@@ -58,6 +58,14 @@ Backup audit worker (every 5s)
 
 ## Setup
 
+**Docker (recommended):**
+```bash
+docker compose up
+```
+Starts PostgreSQL, Redis, the API server, and the background worker. Tables are created automatically on first run.
+
+**Manual:**
+
 ```bash
 pnpm install
 ```
@@ -65,9 +73,10 @@ pnpm install
 `.env`:
 ```env
 PORT=5001
-POSTGRES_URL=postgresql://postgres:PASSWORD@localhost:5432/polaris_db
+POSTGRES_URL=postgresql://postgres:PASSWORD@localhost:5432/cache_consistency_db
 REDIS_URL=redis://localhost:6379
 FAILURE_MODE=delay
+ENABLE_VERSIONING=false
 ```
 
 ```bash

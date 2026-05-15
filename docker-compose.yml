@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: cache_consistency_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    command: sh -c "pnpm drizzle-kit push --force && pnpm dev"
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      POSTGRES_URL: postgresql://postgres:password@postgres:5432/cache_consistency_db
+      REDIS_URL: redis://redis:6379
+      FAILURE_MODE: delay
+      ENABLE_VERSIONING: "false"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: pnpm worker
+    environment:
+      POSTGRES_URL: postgresql://postgres:password@postgres:5432/cache_consistency_db
+      REDIS_URL: redis://redis:6379
+      FAILURE_MODE: delay
+      ENABLE_VERSIONING: "false"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
