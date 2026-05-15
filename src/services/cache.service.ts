@@ -1,18 +1,17 @@
 import { redisClient } from "../config/redis";
 import { db } from "../db";
 import { inconsistencies, items } from "../db/schema";
-import { and, eq } from "drizzle-orm";
-import { InferSelectModel } from "drizzle-orm";
+import { and, eq, InferSelectModel } from "drizzle-orm";
 
 type Item = InferSelectModel<typeof items>;
 
-export const getCache = async (key: string) => {
+export const getCache = async (key: string): Promise<Item | null> => {
   const data = await redisClient.get(key);
 
   if (!data) return null;
 
   try {
-    return JSON.parse(data);
+    return JSON.parse(data) as Item;
   } catch {
     console.log("Invalid cache data");
     return null;
